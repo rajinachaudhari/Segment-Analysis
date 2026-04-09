@@ -30,7 +30,7 @@ grp = df_feat.groupby("user_id")
 grp_month = df_feat.groupby(["user_id", "month"])
 
 # -----------------------------------------------
-# BASIC AGGREGATIONS (FAST)
+# BASIC AGGREGATIONS 
 # -----------------------------------------------
 user_df = grp.agg(
     total_txn_count=("txn_id", "count"),

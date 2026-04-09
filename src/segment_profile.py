@@ -260,4 +260,4 @@ print(segment_ratio.round(2))
 # DONE
 # ============================================================
 
-print("\n✅ Segmentation Analysis Complete!")
+print("\n Segmentation Analysis Complete!")
