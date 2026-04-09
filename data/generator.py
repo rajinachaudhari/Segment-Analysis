@@ -1,6 +1,3 @@
-# 
-
-
 
 import pandas as pd
 import numpy as np
@@ -79,7 +76,7 @@ TXN_TYPES = ['TOPUP','P2P_TRANSFER','MERCHANT_PAY','CASHOUT']
 def generate_transactions(users_df):
     rows = []
 
-    start = pd.Timestamp(CFG["START_DATE"])  # ✅ correct place
+    start = pd.Timestamp(CFG["START_DATE"])  
 
     for _, user in users_df.iterrows():
 
