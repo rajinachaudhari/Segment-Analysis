@@ -1,291 +1,237 @@
-# import pandas as pd 
-# import numpy as np
-
-# pd.options.display.max_columns = 100
-
-# df = pd.read_csv("data/clean_fintech_data.csv")
-
-# # re-converting date columns as pandas csv read them as object
-# df["txn_date"] = pd.to_datetime(df["txn_date"])
-# df["account_open_date"] = pd.to_datetime(df["account_open_date"])
-# df["date_of_birth"] = pd.to_datetime(df["date_of_birth"])
-
-
-# #-----------------------------------------------
-# #feature creation
-# #----------------------------------------------
-
-# # creating customer-level features
-# #i.e c1 spent total x amt,average y amt, their max transaction amt was z and they made n transactions in total.
-# customer_df = df.groupby("customer_id").agg(
-#     total_spent=("amount_npr", "sum"),
-#     avg_spent=("amount_npr", "mean"),  #average transaction value per customer
-#     max_txn=("amount_npr", "max"),
-#     txn_count=("txn_id", "count")
-# ).reset_index()
-
-# # 2. Calculate average transactions per month per customer
-# txn_freq = (
-#     df.groupby(["customer_id", df["txn_date"].dt.to_period("M")])
-#     .size()
-#     .groupby("customer_id")
-#     .mean()
-#     .reset_index(name="txn_freq_per_month")
-# )
-# #this shows their transaction behavior  
-
-# #===========================================
-
-# #how frequent customer use this service
-# latest_date = df["txn_date"].max()
-# recency = df.groupby("customer_id")["txn_date"].max().reset_index()
-# recency["recency_days"] = (latest_date - recency["txn_date"]).dt.days
-# #less the recency_days more frequent the customer is.
-
-# #How many different days the customer transacted i.e their active days
-# active_days = df.groupby("customer_id")["txn_date"].nunique().reset_index(name="active_days")
-
-# #How many products the customer uses.
-# feature_adoption = df.groupby("customer_id")["product_name"].nunique().reset_index(name="feature_adoption")
-
-# #this shows their engagement behavior
-
-# #===========================================
-# #what is the rate of failed transactions for each customer
-# failed_txn_rate = df.groupby("customer_id")["status"].apply(
-#     lambda x: (x == "failed").mean()
-# ).reset_index(name="failed_txn_rate")
-
-# #transaction inconsistency: how much variation in transaction amount for each customer
-# txn_std = (
-#     df.groupby(["customer_id", df["txn_date"].dt.to_period("M")])
-#     .size()
-#     .groupby("customer_id")
-#     .std()
-#     .reset_index(name="txn_freq_std")
-# )
-# #if std is high then it means the customer has inconsistent transaction behavior, 
-# # if low then they have consistent behavior.this helps to detect spike/salary days.
-
-# #time of transaction: does the customer transact at a specific time of the day or is it spread out throughout the day.
-# df["txn_hour"] = df["txn_date"].dt.hour
-# txn_time_spread = df.groupby("customer_id")["txn_hour"].std().reset_index(name="txn_time_spread")
-# #if specific time then low std, if spread out then high std. this helps to detect if they are habitual time users or not.
-
-# #high value transaction ratio: what percentage of their transactions are above a certain threshold (e.g., 50,000 NPR). if they have high ratio then they are more likely to be high value customers but also more risky.
-# high_txn = df[df["amount_npr"] > 50000].groupby("customer_id").size()
-# total_txn = df.groupby("customer_id").size()
-# high_value_ratio = (high_txn / total_txn).reset_index(name="high_value_txn_ratio")
-
-# #new payee: how many unique merchants does the customer transact with. if they transact with more merchants then they are more likely to be engaged but also more risky.
-# new_merchant = df.groupby("customer_id")["merchant_id"].nunique().reset_index(name="unique_merchants")
-
-# #this shows their risk behavior
-
-# #============================================
-# #spend to load ratio
-# load = df[df["txn_type"] == "topup"].groupby("customer_id")["amount_npr"].sum()
-# spend = df[df["txn_type"] != "topup"].groupby("customer_id")["amount_npr"].sum()
-# ratio = (spend / load).reset_index(name="spend_to_load_ratio")
-
-
-# #how many different categories of services the customer uses. if they use more categories then they are more likely to be engaged and loyal.
-# service_diversity = df.groupby("customer_id")["category"].nunique().reset_index(name="service_diversity")
-
-# #spend trend: is the customer's spending increasing, decreasing, or stable over time. 
-# monthly_spend = df.groupby(["customer_id", "month"])["amount_npr"].sum().reset_index()
-# trend = monthly_spend.groupby("customer_id")["amount_npr"].apply(
-#     lambda x: np.polyfit(range(len(x)), x, 1)[0] if len(x) > 1 else 0
-# ).reset_index(name="spend_trend")
-# #if increasing then engaged else churn
-
-
-# # print(df.info())
-
-
-
-
 import pandas as pd
 import numpy as np
+from sklearn.preprocessing import StandardScaler
 
 pd.options.display.max_columns = 100
 
-
-df = pd.read_csv("data/clean_fintech_data.csv")
-
-# Convert date columns to datetime
-df["txn_date"] = pd.to_datetime(df["txn_date"])
-df["account_open_date"] = pd.to_datetime(df["account_open_date"])
-df["date_of_birth"] = pd.to_datetime(df["date_of_birth"])
+# -----------------------------------------------
+# LOAD DATA
+# -----------------------------------------------
+df = pd.read_parquet("data/clean_fintech_data.parquet")
+df_feat = df.copy()
 
 # -----------------------------------------------
-# PRECOMPUTE COMMON COLUMNS (for efficiency)
+# TIME FEATURES
 # -----------------------------------------------
-df["month"] = df["txn_date"].dt.to_period("M")
-df["txn_hour"] = df["txn_date"].dt.hour
-df["is_topup"] = (df["txn_type"] == "topup").astype(int)
-df["high_txn"] = (df["amount_npr"] > 50000).astype(int)
+df_feat["month"] = df_feat["created_at"].dt.to_period("M")
+df_feat["txn_hour"] = df_feat["created_at"].dt.hour
+df_feat["txn_day"] = df_feat["created_at"].dt.date
 
 # -----------------------------------------------
-# CREATE GROUPED OBJECTS (IMPORTANT OPTIMIZATION)
+# FLAGS
 # -----------------------------------------------
-grp = df.groupby("customer_id")
-grp_month = df.groupby(["customer_id", "month"])
+df_feat["is_topup"] = (df_feat["txn_type"] == "TOPUP").astype(int)
+df_feat["is_high_txn"] = (df_feat["amount"] > 10000).astype(int)
 
 # -----------------------------------------------
-# 1. TRANSACTION BEHAVIOR FEATURES
+# GROUPING
 # -----------------------------------------------
-customer_df = grp.agg(
-    total_spent=("amount_npr", "sum"),        # total money spent
-    avg_spent=("amount_npr", "mean"),         # avg transaction value
-    max_txn=("amount_npr", "max"),            # highest transaction
-    txn_count=("txn_id", "count"),            # total transactions
-    
-    active_days=("txn_date", "nunique"),      # unique days active
-    feature_adoption=("product_name", "nunique"),  # number of products used
-    service_diversity=("category", "nunique"),     # number of categories used
-    unique_merchants=("merchant_id", "nunique")    # unique merchants interacted
+grp = df_feat.groupby("user_id")
+grp_month = df_feat.groupby(["user_id", "month"])
+
+# -----------------------------------------------
+# BASIC AGGREGATIONS (FAST)
+# -----------------------------------------------
+user_df = grp.agg(
+    total_txn_count=("txn_id", "count"),
+    total_spend_npr=("amount", "sum"),
+    avg_txn_value=("amount", "mean"),
+    max_txn=("amount", "max"),
+    active_days=("txn_day", "nunique"),
+    txn_types=("txn_type", "nunique"),
+    channels=("channel", "nunique"),
 ).reset_index()
 
 # -----------------------------------------------
-# 2. RECENCY (ENGAGEMENT)
+# RECENCY & ACCOUNT AGE
 # -----------------------------------------------
-latest_date = df["txn_date"].max()
+latest_date = df_feat["created_at"].max()
 
-customer_df["recency_days"] = (
-    latest_date - grp["txn_date"].max()
-).dt.days.values
+last_txn = grp["created_at"].max()
+first_reg = grp["registration_date"].first()
 
-# Lower recency_days = more active user
-
-# -----------------------------------------------
-# 3. FAILED TRANSACTION RATE (RISK)
-# -----------------------------------------------
-customer_df["failed_txn_rate"] = grp["status"].apply(
-    lambda x: (x == "failed").mean()
-).values
+user_df["recency_days"] = (latest_date - user_df["user_id"].map(last_txn)).dt.days
+user_df["account_age_days"] = (latest_date - user_df["user_id"].map(first_reg)).dt.days
 
 # -----------------------------------------------
-# 4. MONTHLY TRANSACTION FEATURES
+# ACTIVE RATIO (SAFE)
 # -----------------------------------------------
-monthly_txn = grp_month.size().rename("monthly_txn")
-monthly_spend = grp_month["amount_npr"].sum()
-
-# Average transactions per month
-customer_df["txn_freq_per_month"] = (
-    monthly_txn.groupby("customer_id").mean().values
-)
-
-# Transaction consistency (std)
-customer_df["txn_freq_std"] = (
-    monthly_txn.groupby("customer_id").std().values
+user_df["active_ratio"] = np.where(
+    user_df["account_age_days"] > 0,
+    user_df["active_days"] / user_df["account_age_days"],
+    0
 )
 
 # -----------------------------------------------
-# 5. TIME BEHAVIOR (RISK SIGNAL)
+# MONTHLY FEATURES
 # -----------------------------------------------
-customer_df["txn_time_spread"] = grp["txn_hour"].std().values
+monthly_txn = grp_month.size()
 
-# High spread = irregular timing (potential anomaly)
-
-# -----------------------------------------------
-# 6. HIGH VALUE TRANSACTION RATIO
-# -----------------------------------------------
-customer_df["high_value_txn_ratio"] = grp["high_txn"].mean().values
+user_df["txn_freq_per_month"] = monthly_txn.groupby("user_id").mean().values
+user_df["txn_freq_std"] = monthly_txn.groupby("user_id").std().fillna(0).values
 
 # -----------------------------------------------
-# 7. SPEND TO LOAD RATIO (FINTECH CORE METRIC)
+# FINANCIAL FEATURES (OPTIMIZED)
 # -----------------------------------------------
-load = grp.apply(lambda x: x.loc[x["is_topup"] == 1, "amount_npr"].sum())
-spend = grp.apply(lambda x: x.loc[x["is_topup"] == 0, "amount_npr"].sum())
+topup_df = df_feat[df_feat["is_topup"] == 1]
+spend_df = df_feat[df_feat["is_topup"] == 0]
 
-customer_df["spend_to_load_ratio"] = (spend / load).replace(
-    [np.inf, -np.inf], 0
-).values
+load = topup_df.groupby("user_id")["amount"].sum()
+spend = spend_df.groupby("user_id")["amount"].sum()
+
+user_df["load"] = user_df["user_id"].map(load).fillna(0)
+user_df["spend"] = user_df["user_id"].map(spend).fillna(0)
+
+user_df["spend_to_load_ratio"] = np.where(
+    user_df["load"] > 0,
+    user_df["spend"] / user_df["load"],
+    0
+)
+
+# Wallet features
+wallet_cols = grp[["balance", "total_loaded_npr", "total_spent_npr"]].first()
+user_df = user_df.merge(wallet_cols, on="user_id", how="left")
 
 # -----------------------------------------------
-# 8. SPENDING TREND (GROWTH / CHURN SIGNAL)
+# RISK FEATURES (FAST)
 # -----------------------------------------------
+status_counts = df_feat.groupby(["user_id", "status"]).size().unstack(fill_value=0)
+
+failed = status_counts.get("FAILED", 0)
+total = status_counts.sum(axis=1)
+
+user_df["failed_txn_rate"] = user_df["user_id"].map(failed / total).fillna(0)
+user_df["high_value_ratio"] = grp["is_high_txn"].mean().values
+
+# -----------------------------------------------
+# TREND FEATURE
+# -----------------------------------------------
+monthly_spend = grp_month["amount"].sum()
+
 def calc_trend(x):
     if len(x) > 1:
         return np.polyfit(range(len(x)), x, 1)[0]
     return 0
 
-trend = monthly_spend.groupby("customer_id").apply(calc_trend)
-
-customer_df["spend_trend"] = trend.values
-
-# Positive → increasing usage
-# Negative → declining (churn risk)
+trend = monthly_spend.groupby("user_id").apply(calc_trend)
+user_df["spend_trend"] = trend.values
 
 # -----------------------------------------------
-# FINAL CLEANING
+# NEW PAYEE RATE (OPTIMIZED)
 # -----------------------------------------------
-customer_df = customer_df.fillna(0)
+payee_counts = df_feat.groupby("user_id")["receiver_user_id"].nunique()
+txn_counts = df_feat.groupby("user_id")["txn_id"].count()
+
+user_df["new_payee_rate"] = (
+    user_df["user_id"].map(payee_counts) /
+    user_df["user_id"].map(txn_counts)
+).fillna(0)
 
 # -----------------------------------------------
-# READY FOR MODELING
+# CHANNEL RATIOS
 # -----------------------------------------------
-print(customer_df.head())
-print(customer_df.shape)
-print(customer_df.info())
+channel_ratio = df_feat.pivot_table(
+    index="user_id",
+    columns="channel",
+    values="txn_id",
+    aggfunc="count",
+    fill_value=0
+)
 
+channel_ratio = channel_ratio.div(channel_ratio.sum(axis=1), axis=0)
+channel_ratio.columns = [f"channel_{c}_ratio" for c in channel_ratio.columns]
 
+user_df = user_df.merge(channel_ratio, on="user_id", how="left")
 
-#------------------------------------
-# FEATURE TRANSFORMATION 
-#------------------------------------
+# -----------------------------------------------
+# IS ACTIVE FLAG (for RFM)
+# -----------------------------------------------
+user_df["is_active"] = (user_df["recency_days"] <= 30).astype(int)
 
+# -----------------------------------------------
+# CLEANING (CRITICAL FIXES)
+# -----------------------------------------------
+user_df = user_df.replace([np.inf, -np.inf], np.nan)
 
-print(customer_df.skew(numeric_only=True).sort_values(ascending=False))
+# Cap extreme values
+user_df["spend_to_load_ratio"] = user_df["spend_to_load_ratio"].clip(0, 10)
 
+# Fill NaNs
+user_df = user_df.fillna(0)
 
-# LOG TRANSFORM (only skewed continuous features):
-log_features = [
-    "total_spent",
-    "avg_spent",
+# -----------------------------------------------
+# DROP USELESS FEATURES
+# -----------------------------------------------
+user_df.drop([
+    "txn_types",
+    "channels",
+    "load",
+    "spend"
+], axis=1, inplace=True)
+
+# -----------------------------------------------
+# LOG TRANSFORM
+# -----------------------------------------------
+log_cols = [
+    "total_spend_npr",
+    "avg_txn_value",
     "max_txn",
     "txn_freq_per_month",
     "recency_days",
-    "spend_to_load_ratio"
+    "spend_to_load_ratio",
+    "total_txn_count"
 ]
 
-for col in log_features:
-    customer_df[col] = np.log1p(customer_df[col])
+for col in log_cols:
+    user_df[col] = np.log1p(user_df[col])
 
-# DO NOT log these:"failed_txn_rate"and "high_value_txn_ratio" as they are already in [0,1] range and log transform would distort them.
+# -----------------------------------------------
+# BINARY FLAGS
+# -----------------------------------------------
+user_df["has_failed_txn"] = (user_df["failed_txn_rate"] > 0).astype(int)
+user_df["has_high_value_txn"] = (user_df["high_value_ratio"] > 0).astype(int)
 
-# instead flag them as binary features;
-customer_df["has_failed_txn"] = (customer_df["failed_txn_rate"] > 0).astype(int)
-customer_df["has_high_value_txn"] = (customer_df["high_value_txn_ratio"] > 0).astype(int)
+# Clip
+user_df["failed_txn_rate"] = user_df["failed_txn_rate"].clip(0, 0.5)
+user_df["high_value_ratio"] = user_df["high_value_ratio"].clip(0, 0.8)
 
-# or clipping only the failed_txn_rate to 0.5 as it is a risk signal and we want to cap extreme values but not distort the distribution too much.
-customer_df["failed_txn_rate"] = customer_df["failed_txn_rate"].clip(upper=0.5)   
-customer_df["high_value_txn_ratio"] = customer_df["high_value_txn_ratio"].clip(upper=0.8) 
+# -----------------------------------------------
+# SCALING
+# -----------------------------------------------
 
-# SCALING:
-from sklearn.preprocessing import StandardScaler
+binary_cols = ["is_active", "has_failed_txn", "has_high_value_txn"]
 
-#before scaling we need to drop customer_id as it is not a feature.
-X_df = customer_df.drop("customer_id", axis=1).copy()
+X = user_df.drop("user_id", axis=1)
+
+X_num = X.drop(columns=binary_cols)
+X_bin = X[binary_cols]
 
 scaler = StandardScaler()
-X_scaled = scaler.fit_transform(X_df)
+X_scaled_num = scaler.fit_transform(X_num)
 
-#re-create dataframe with scaled features and add customer_id back for reference
-X_scaled_df = pd.DataFrame(X_scaled, columns=X_df.columns)
+X_scaled_df = pd.DataFrame(X_scaled_num, columns=X_num.columns)
 
-X_scaled_df["customer_id"] = customer_df["customer_id"]
-cols = ["customer_id"] + list(X_df.columns) # ensure customer_id is the first column
+# Add binary features back WITHOUT scaling
+X_scaled_df[binary_cols] = X_bin.reset_index(drop=True)
+X_scaled_df["user_id"] = user_df["user_id"].values
+cols = ["user_id"] + [c for c in X_scaled_df.columns if c != "user_id"]
 X_scaled_df = X_scaled_df[cols]
 
-print(X_scaled_df.head())
-print(X_scaled_df.describe())
 
-#saving the scaled features for modeling
-X_scaled_df.to_csv("data/scaled_features.csv", index=False)
-X_scaled_df.to_feather("data/scaled_features.feather")
+# Memory optimization
+for col in X_scaled_df.select_dtypes(include="float64").columns:
+    X_scaled_df[col] = X_scaled_df[col].astype("float32")
 
-# check that the scaled features have mean ~0 and std ~1
-print(X_scaled_df.select_dtypes(include='number').mean())
-print(X_scaled_df.select_dtypes(include='number').std())
+# -----------------------------------------------
+# SAVE
+# -----------------------------------------------
+X_scaled_df.to_parquet("data/scaled_features.parquet", index=False)
+X_scaled_df.to_csv("scaled_features.csv", index=False)
+
+
+# -----------------------------------------------
+# VALIDATION
+# -----------------------------------------------
+print("Shape:", X_scaled_df.shape)
+print("Means:\n", X_scaled_df.select_dtypes(include='number').mean())
+print("Std:\n", X_scaled_df.select_dtypes(include='number').std())

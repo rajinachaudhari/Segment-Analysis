@@ -26,3 +26,6 @@ tqdm==4.66.4
 
 # Plot styling (optional)
 plotly==5.22.0
+
+#for data generation 
+pyarrow 
